@@ -172,13 +172,18 @@ def log_event(
 # -----------------------------
 # Demo data generation (synthetic only)
 # -----------------------------
-def _random_date_of_birth(min_age=0, max_age=90) -> date:
-    """Return a plausible DOB for a synthetic patient."""
+import random
+
+def _random_date_of_birth(min_age: int = 0, max_age: int = 90) -> date:
+    """
+    Return a plausible synthetic DOB (not real patient data).
+    Age is uniformly sampled between min_age and max_age.
+    """
     today = date.today()
     age_years = random.randint(min_age, max_age)
-    # simple approximation: pick a day within that year span
-    days = int(age_years * 365.25)
-    return today.replace(year=today.year) - pd.Timedelta(days=days + random.randint(0, 365)).to_pytimedelta()
+    # Approximate DOB by subtracting (age_years * 365.25 + random extra days)
+    total_days = int(age_years * 365.25) + random.randint(0, 365)
+    return (pd.Timestamp(today) - pd.Timedelta(days=total_days)).date()
 
 def _random_doc_number(doc_type: str) -> str:
     """Generate a synthetic document number (not a real ID)."""
@@ -186,20 +191,36 @@ def _random_doc_number(doc_type: str) -> str:
         length = random.randint(7, 10)
     else:
         length = random.randint(7, 12)
-    return "".join([str(random.randint(0, 9)) for _ in range(length)])
+    return "".join(str(random.randint(0, 9)) for _ in range(length))
+
+def _iso_ts(dt: pd.Timestamp) -> str:
+    """ISO timestamp string for CSV logs (seconds precision)."""
+    return dt.isoformat(timespec="seconds")
 
 def generate_synthetic_dataset(
     n: int,
     procedures_df: pd.DataFrame,
     created_by_user_id: str = "DEMO_REC_01",
+    pct_flagged: float = 0.20,        # target: % of appointments that get flagged (0–1)
+    pct_returned: float = 0.25,       # target: among reviewed, % returned for fix (0–1)
+    min_delay_mins: int = 5,          # min minutes from intake -> billing decision
+    max_delay_mins: int = 30,         # max minutes from intake -> billing decision
+    seed: int | None = 42,            # fixed seed for reproducibility (set None for random)
 ):
     """
-    Create synthetic appointments + events so analytics/billing have something to show.
-    This writes ONLY synthetic data to the CSVs (safe for thesis demos).
+    Create synthetic appointments + events so Analytics/Billing have data to show.
+
+    IMPORTANT (thesis transparency):
+    - This is synthetic data only (no PHI).
+    - We parameterize rates via pct_flagged / pct_returned so we can test
+      behavior under different scenarios without pretending it is real data.
     """
     ensure_data_folder()
 
-    # Light, realistic-ish name pool (synthetic)
+    if seed is not None:
+        random.seed(seed)
+
+    # Lightweight synthetic name pool (not real patient names)
     first_names = ["Maria", "Camila", "Laura", "Sofia", "Valentina", "Andres", "Juan", "Carlos", "Mateo", "Daniela"]
     surnames = ["Perez", "Gomez", "Rodriguez", "Martinez", "Garcia", "Lopez", "Hernandez", "Torres", "Ruiz", "Charris"]
 
@@ -209,20 +230,25 @@ def generate_synthetic_dataset(
     service_types = SERVICE_TYPES
     procedure_options = procedures_df["procedure_name"].astype(str).tolist()
 
-    appt_rows = []
-    event_rows = []
+    appt_rows: list[dict] = []
+    event_rows: list[dict] = []
 
-    now_ts = datetime.now()
+    now_ts = pd.Timestamp.now()
 
-    for i in range(n):
+    # Clamp inputs to safe ranges
+    pct_flagged = max(0.0, min(1.0, float(pct_flagged)))
+    pct_returned = max(0.0, min(1.0, float(pct_returned)))
+    min_delay_mins = max(0, int(min_delay_mins))
+    max_delay_mins = max(min_delay_mins, int(max_delay_mins))
+
+    for _ in range(int(n)):
         appointment_id = str(uuid.uuid4())
 
+        # --- Patient-ish fields (synthetic) ---
         doc_type = random.choice(doc_types)
         doc_number = _random_doc_number(doc_type)
-
         first_name = random.choice(first_names)
         first_surname = random.choice(surnames)
-
         dob = _random_date_of_birth(min_age=0, max_age=90)
 
         eps_name = random.choice(eps_list)
@@ -231,22 +257,23 @@ def generate_synthetic_dataset(
         service_type = random.choice(service_types)
         procedure_name = random.choice(procedure_options)
 
-        # Create appointment datetime within next ~14 days for demo realism
+        # --- Appointment timing (future-ish, for UI realism) ---
         appt_dt = now_ts + pd.Timedelta(days=random.randint(0, 14), hours=random.randint(0, 8))
         appointment_datetime = appt_dt.strftime("%Y-%m-%d %H:%M")
 
+        # --- Authorization / copay (synthetic) ---
         needs_auth = authorization_required_for(procedure_name, procedures_df)
 
-        # Synthetic “authorization number” for EPS cases needing it (sometimes missing on purpose)
+        # If needs_auth, sometimes omit to trigger realistic flags
         authorization_number = ""
-        if needs_auth and random.random() < 0.75:
+        if needs_auth and random.random() > 0.30:  # ~70% provided, ~30% missing
             authorization_number = f"AUT-{random.randint(100000, 999999)}"
 
-        # Synthetic copay: sometimes blank, sometimes numeric
         copay_amount = ""
-        if random.random() < 0.6:
+        if random.random() < 0.60:
             copay_amount = str(random.choice([0, 5000, 10000, 15000, 20000]))
 
+        # --- Save appointment row ---
         appt_rows.append({
             "appointment_id": appointment_id,
             "created_at": now_iso(),
@@ -266,10 +293,27 @@ def generate_synthetic_dataset(
             "status_updated_by_user_id": created_by_user_id,
         })
 
-        # Events: intake saved
+        # -----------------------------
+        # FIX: realistic event timeline
+        # -----------------------------
+        # Choose a base time in the last ~7 days (so analytics looks plausible)
+        base = now_ts - pd.Timedelta(days=random.randint(0, 7), hours=random.randint(0, 10))
+        intake_dt = base + pd.Timedelta(minutes=random.randint(0, 30))
+
+        # Flags happen shortly after intake
+        flag_dt = intake_dt + pd.Timedelta(minutes=random.randint(1, 8))
+
+        # Sent to review shortly after flags
+        review_dt = flag_dt + pd.Timedelta(minutes=random.randint(0, 3))
+
+        # Billing decision: 5–30 minutes after intake (your target range)
+        delay = random.randint(min_delay_mins, max_delay_mins)
+        decision_dt = intake_dt + pd.Timedelta(minutes=delay)
+
+        # --- Event: intake saved ---
         event_rows.append({
             "event_id": str(uuid.uuid4()),
-            "timestamp": now_iso(),
+            "timestamp": _iso_ts(intake_dt),
             "appointment_id": appointment_id,
             "event_type": "INTAKE_SAVED",
             "user_role": "Recepción",
@@ -282,7 +326,7 @@ def generate_synthetic_dataset(
             "new_status": "",
         })
 
-        # Build a form dict so we can reuse your exact rule checks (consistent logic)
+        # Build a form dict so we reuse YOUR rule_checks (consistent behavior)
         form = {
             "document_type": doc_type,
             "document_number": doc_number,
@@ -298,14 +342,23 @@ def generate_synthetic_dataset(
             "copay_amount": copay_amount,
         }
 
+        # Baseline rule flags (your real logic)
         reasons = rule_checks(form, procedures_df)
 
-        # If needs_auth but we intentionally left blank, rules will flag it.
-        if reasons:
-            for r in reasons:
+        # Thesis-friendly control:
+        # Even if no rule flags happened, we still flag some % to simulate variation.
+        is_flagged = (random.random() < pct_flagged) or (len(reasons) > 0)
+
+        # If we flag but rule_checks returned nothing, assign a plausible reason code
+        if is_flagged and len(reasons) == 0:
+            reasons = [random.choice(list(FLAG_REASON_LABELS.keys()))]
+
+        if is_flagged:
+            # Each reason gets a slightly different timestamp (seconds apart)
+            for idx, r in enumerate(reasons):
                 event_rows.append({
                     "event_id": str(uuid.uuid4()),
-                    "timestamp": now_iso(),
+                    "timestamp": _iso_ts(flag_dt + pd.Timedelta(seconds=idx * 7)),
                     "appointment_id": appointment_id,
                     "event_type": "FLAGGED_RULE",
                     "user_role": "Recepción",
@@ -317,9 +370,10 @@ def generate_synthetic_dataset(
                     "previous_status": "",
                     "new_status": "",
                 })
+
             event_rows.append({
                 "event_id": str(uuid.uuid4()),
-                "timestamp": now_iso(),
+                "timestamp": _iso_ts(review_dt),
                 "appointment_id": appointment_id,
                 "event_type": "SENT_TO_REVIEW",
                 "user_role": "Recepción",
@@ -332,17 +386,17 @@ def generate_synthetic_dataset(
                 "new_status": "",
             })
 
-            # Simulate billing decision sometimes (approve vs return)
-            if random.random() < 0.7:
-                decision = "APROBAR"
-                correction_reason = ""
-            else:
+            # Billing decision controlled by pct_returned
+            if random.random() < pct_returned:
                 decision = "DEVOLVER_PARA_CORRECCION"
                 correction_reason = random.choice(CORRECTION_REASONS)
+            else:
+                decision = "APROBAR"
+                correction_reason = ""
 
             event_rows.append({
                 "event_id": str(uuid.uuid4()),
-                "timestamp": now_iso(),
+                "timestamp": _iso_ts(decision_dt),
                 "appointment_id": appointment_id,
                 "event_type": "REVIEW_DECISION_RECORDED",
                 "user_role": "Facturación",
@@ -355,11 +409,10 @@ def generate_synthetic_dataset(
                 "new_status": "",
             })
 
-    # Write/append to files
+    # Append to CSVs (local or Streamlit Cloud ephemeral storage)
     appt_df = pd.DataFrame(appt_rows)
     events_df = pd.DataFrame(event_rows)
 
-    # If file doesn't exist, write header; otherwise append
     if not APPOINTMENTS_FILE.exists():
         appt_df.to_csv(APPOINTMENTS_FILE, index=False)
     else:
@@ -376,6 +429,7 @@ def reset_demo_data():
         APPOINTMENTS_FILE.unlink()
     if EVENTS_LOG_FILE.exists():
         EVENTS_LOG_FILE.unlink()
+
 
 # -----------------------------
 # Procedures catalog
@@ -746,6 +800,9 @@ def main():
 
     st.title("MVP — Consulta Externa + Revisión en Facturación (HITL)")
 
+    # -----------------------------
+    # Role and user (audit trail)
+    # -----------------------------
     st.sidebar.header("Rol y usuario")
     role = st.sidebar.selectbox("Selecciona el rol", ROLES)
 
@@ -761,37 +818,86 @@ def main():
     user_id = st.sidebar.text_input("ID de usuario (ej: REC_01 / FAC_01)", value=default_user)
 
     # -----------------------------
-    # Thesis demo mode (synthetic data)
+    # Thesis demo mode (synthetic data only)
     # -----------------------------
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Demo (thesis)")
-    demo_mode = st.sidebar.toggle("Demo mode (synthetic data)", value=False)
+    st.sidebar.subheader("Modo demo (tesis)")
+    demo_mode = st.sidebar.checkbox("Activar modo demo (datos sintéticos)", value=False)
 
     if demo_mode:
         # Visible disclaimer for reviewers (privacy-by-design)
-        st.info("DEMO MODE — Synthetic data only (no real patient information).")
+        st.info("DEMO MODE — Datos sintéticos únicamente (sin información real de pacientes).")
 
-        procedures_df = load_procedures()
-        n = st.sidebar.number_input(
-            "How many synthetic appointments?",
-            min_value=1,
-            max_value=500,
-            value=20,
-            step=5
+        n_demo = st.sidebar.number_input(
+            "Cantidad de citas a generar",
+            min_value=10,
+            max_value=5000,
+            value=200,
+            step=10
         )
 
-        col_a, col_b = st.sidebar.columns(2)
-        with col_a:
-            if st.button("Generate demo data"):
-                generate_synthetic_dataset(int(n), procedures_df=procedures_df)
-                st.success(f"Generated {n} synthetic appointments.")
-                st.rerun()
+        pct_flagged = st.sidebar.slider(
+            "% citas marcadas en recepción",
+            min_value=0,
+            max_value=60,
+            value=20,
+            step=1
+        ) / 100.0
 
-        with col_b:
-            if st.button("Reset demo data"):
-                reset_demo_data()
-                st.warning("Demo data deleted (appointments/events).")
-                st.rerun()
+        pct_returned = st.sidebar.slider(
+            "% devueltas por facturación (de las revisadas)",
+            min_value=0,
+            max_value=60,
+            value=25,
+            step=1
+        ) / 100.0
+
+        min_delay = st.sidebar.slider(
+            "Minutos mínimo (ingreso → decisión)",
+            min_value=0,
+            max_value=120,
+            value=5,
+            step=1
+        )
+
+        max_delay = st.sidebar.slider(
+            "Minutos máximo (ingreso → decisión)",
+            min_value=0,
+            max_value=240,
+            value=30,
+            step=1
+        )
+
+        seed = st.sidebar.number_input(
+            "Semilla (reproducibilidad)",
+            min_value=0,
+            max_value=999999,
+            value=42,
+            step=1
+        )
+
+        procedures_df = load_procedures()
+
+        c1, c2 = st.sidebar.columns(2)
+
+        if c1.button("Generar datos demo"):
+            generate_synthetic_dataset(
+                n=int(n_demo),
+                procedures_df=procedures_df,
+                created_by_user_id="DEMO_REC_01",
+                pct_flagged=pct_flagged,
+                pct_returned=pct_returned,
+                min_delay_mins=int(min_delay),
+                max_delay_mins=int(max_delay),
+                seed=int(seed),
+            )
+            st.sidebar.success("Datos demo generados.")
+            st.rerun()
+
+        if c2.button("Borrar datos demo"):
+            reset_demo_data()
+            st.sidebar.success("Datos demo eliminados.")
+            st.rerun()
 
     # -----------------------------
     # Navigation
