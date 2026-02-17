@@ -1,4 +1,5 @@
 import uuid
+import random
 from datetime import datetime, date
 from pathlib import Path
 
@@ -168,6 +169,213 @@ def log_event(
     }
     append_row_csv(EVENTS_LOG_FILE, event)
 
+# -----------------------------
+# Demo data generation (synthetic only)
+# -----------------------------
+def _random_date_of_birth(min_age=0, max_age=90) -> date:
+    """Return a plausible DOB for a synthetic patient."""
+    today = date.today()
+    age_years = random.randint(min_age, max_age)
+    # simple approximation: pick a day within that year span
+    days = int(age_years * 365.25)
+    return today.replace(year=today.year) - pd.Timedelta(days=days + random.randint(0, 365)).to_pytimedelta()
+
+def _random_doc_number(doc_type: str) -> str:
+    """Generate a synthetic document number (not a real ID)."""
+    if doc_type in ["CC", "TI"]:
+        length = random.randint(7, 10)
+    else:
+        length = random.randint(7, 12)
+    return "".join([str(random.randint(0, 9)) for _ in range(length)])
+
+def generate_synthetic_dataset(
+    n: int,
+    procedures_df: pd.DataFrame,
+    created_by_user_id: str = "DEMO_REC_01",
+):
+    """
+    Create synthetic appointments + events so analytics/billing have something to show.
+    This writes ONLY synthetic data to the CSVs (safe for thesis demos).
+    """
+    ensure_data_folder()
+
+    # Light, realistic-ish name pool (synthetic)
+    first_names = ["Maria", "Camila", "Laura", "Sofia", "Valentina", "Andres", "Juan", "Carlos", "Mateo", "Daniela"]
+    surnames = ["Perez", "Gomez", "Rodriguez", "Martinez", "Garcia", "Lopez", "Hernandez", "Torres", "Ruiz", "Charris"]
+
+    eps_list = ["Sura", "Sanitas", "Compensar", "Nueva EPS", "Salud Total", "Coosalud", "Mutual SER"]
+    regimes = ["Contributivo", "Subsidiado"]
+    doc_types = DOCUMENT_TYPES
+    service_types = SERVICE_TYPES
+    procedure_options = procedures_df["procedure_name"].astype(str).tolist()
+
+    appt_rows = []
+    event_rows = []
+
+    now_ts = datetime.now()
+
+    for i in range(n):
+        appointment_id = str(uuid.uuid4())
+
+        doc_type = random.choice(doc_types)
+        doc_number = _random_doc_number(doc_type)
+
+        first_name = random.choice(first_names)
+        first_surname = random.choice(surnames)
+
+        dob = _random_date_of_birth(min_age=0, max_age=90)
+
+        eps_name = random.choice(eps_list)
+        regime = random.choice(regimes)
+
+        service_type = random.choice(service_types)
+        procedure_name = random.choice(procedure_options)
+
+        # Create appointment datetime within next ~14 days for demo realism
+        appt_dt = now_ts + pd.Timedelta(days=random.randint(0, 14), hours=random.randint(0, 8))
+        appointment_datetime = appt_dt.strftime("%Y-%m-%d %H:%M")
+
+        needs_auth = authorization_required_for(procedure_name, procedures_df)
+
+        # Synthetic “authorization number” for EPS cases needing it (sometimes missing on purpose)
+        authorization_number = ""
+        if needs_auth and random.random() < 0.75:
+            authorization_number = f"AUT-{random.randint(100000, 999999)}"
+
+        # Synthetic copay: sometimes blank, sometimes numeric
+        copay_amount = ""
+        if random.random() < 0.6:
+            copay_amount = str(random.choice([0, 5000, 10000, 15000, 20000]))
+
+        appt_rows.append({
+            "appointment_id": appointment_id,
+            "created_at": now_iso(),
+            "created_by_user_id": created_by_user_id,
+            "document_type": doc_type,
+            "document_number": doc_number,
+            "first_name": first_name,
+            "first_surname": first_surname,
+            "date_of_birth": dob.isoformat(),
+            "eps_name": eps_name,
+            "regime": regime,
+            "service_type": service_type,
+            "procedure_name": procedure_name,
+            "appointment_datetime": appointment_datetime,
+            "attendance_status": "PROGRAMADA",
+            "status_updated_at": now_iso(),
+            "status_updated_by_user_id": created_by_user_id,
+        })
+
+        # Events: intake saved
+        event_rows.append({
+            "event_id": str(uuid.uuid4()),
+            "timestamp": now_iso(),
+            "appointment_id": appointment_id,
+            "event_type": "INTAKE_SAVED",
+            "user_role": "Recepción",
+            "user_id": created_by_user_id,
+            "flagged": "",
+            "flag_reason": "",
+            "review_decision": "",
+            "correction_reason": "",
+            "previous_status": "",
+            "new_status": "",
+        })
+
+        # Build a form dict so we can reuse your exact rule checks (consistent logic)
+        form = {
+            "document_type": doc_type,
+            "document_number": doc_number,
+            "first_name": first_name,
+            "first_surname": first_surname,
+            "date_of_birth": dob,
+            "eps_name": eps_name,
+            "regime": regime,
+            "service_type": service_type,
+            "procedure_name": procedure_name,
+            "appointment_datetime": appointment_datetime,
+            "authorization_number": authorization_number,
+            "copay_amount": copay_amount,
+        }
+
+        reasons = rule_checks(form, procedures_df)
+
+        # If needs_auth but we intentionally left blank, rules will flag it.
+        if reasons:
+            for r in reasons:
+                event_rows.append({
+                    "event_id": str(uuid.uuid4()),
+                    "timestamp": now_iso(),
+                    "appointment_id": appointment_id,
+                    "event_type": "FLAGGED_RULE",
+                    "user_role": "Recepción",
+                    "user_id": created_by_user_id,
+                    "flagged": True,
+                    "flag_reason": r,
+                    "review_decision": "",
+                    "correction_reason": "",
+                    "previous_status": "",
+                    "new_status": "",
+                })
+            event_rows.append({
+                "event_id": str(uuid.uuid4()),
+                "timestamp": now_iso(),
+                "appointment_id": appointment_id,
+                "event_type": "SENT_TO_REVIEW",
+                "user_role": "Recepción",
+                "user_id": created_by_user_id,
+                "flagged": True,
+                "flag_reason": "",
+                "review_decision": "",
+                "correction_reason": "",
+                "previous_status": "",
+                "new_status": "",
+            })
+
+            # Simulate billing decision sometimes (approve vs return)
+            if random.random() < 0.7:
+                decision = "APROBAR"
+                correction_reason = ""
+            else:
+                decision = "DEVOLVER_PARA_CORRECCION"
+                correction_reason = random.choice(CORRECTION_REASONS)
+
+            event_rows.append({
+                "event_id": str(uuid.uuid4()),
+                "timestamp": now_iso(),
+                "appointment_id": appointment_id,
+                "event_type": "REVIEW_DECISION_RECORDED",
+                "user_role": "Facturación",
+                "user_id": "DEMO_FAC_01",
+                "flagged": True,
+                "flag_reason": "",
+                "review_decision": decision,
+                "correction_reason": correction_reason,
+                "previous_status": "",
+                "new_status": "",
+            })
+
+    # Write/append to files
+    appt_df = pd.DataFrame(appt_rows)
+    events_df = pd.DataFrame(event_rows)
+
+    # If file doesn't exist, write header; otherwise append
+    if not APPOINTMENTS_FILE.exists():
+        appt_df.to_csv(APPOINTMENTS_FILE, index=False)
+    else:
+        appt_df.to_csv(APPOINTMENTS_FILE, mode="a", header=False, index=False)
+
+    if not EVENTS_LOG_FILE.exists():
+        events_df.to_csv(EVENTS_LOG_FILE, index=False)
+    else:
+        events_df.to_csv(EVENTS_LOG_FILE, mode="a", header=False, index=False)
+
+def reset_demo_data():
+    """Delete local CSVs (safe reset for demos)."""
+    if APPOINTMENTS_FILE.exists():
+        APPOINTMENTS_FILE.unlink()
+    if EVENTS_LOG_FILE.exists():
+        EVENTS_LOG_FILE.unlink()
 
 # -----------------------------
 # Procedures catalog
@@ -521,7 +729,6 @@ def page_analytics():
     st.subheader("Eventos (log) — últimos 50")
     st.dataframe(events.tail(50) if not events.empty else pd.DataFrame(), use_container_width=True)
 
-
 # -----------------------------
 # Main
 # -----------------------------
@@ -553,6 +760,42 @@ def main():
 
     user_id = st.sidebar.text_input("ID de usuario (ej: REC_01 / FAC_01)", value=default_user)
 
+    # -----------------------------
+    # Thesis demo mode (synthetic data)
+    # -----------------------------
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Demo (thesis)")
+    demo_mode = st.sidebar.toggle("Demo mode (synthetic data)", value=False)
+
+    if demo_mode:
+        # Visible disclaimer for reviewers (privacy-by-design)
+        st.info("DEMO MODE — Synthetic data only (no real patient information).")
+
+        procedures_df = load_procedures()
+        n = st.sidebar.number_input(
+            "How many synthetic appointments?",
+            min_value=1,
+            max_value=500,
+            value=20,
+            step=5
+        )
+
+        col_a, col_b = st.sidebar.columns(2)
+        with col_a:
+            if st.button("Generate demo data"):
+                generate_synthetic_dataset(int(n), procedures_df=procedures_df)
+                st.success(f"Generated {n} synthetic appointments.")
+                st.rerun()
+
+        with col_b:
+            if st.button("Reset demo data"):
+                reset_demo_data()
+                st.warning("Demo data deleted (appointments/events).")
+                st.rerun()
+
+    # -----------------------------
+    # Navigation
+    # -----------------------------
     st.sidebar.markdown("---")
     pantalla = st.sidebar.radio("Pantalla", ["Recepción", "Facturación", "Analítica"], index=0)
 
@@ -562,6 +805,7 @@ def main():
         page_billing(user_id)
     else:
         page_analytics()
+
 
 if __name__ == "__main__":
     main()
