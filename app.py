@@ -804,7 +804,7 @@ def main():
     # Role and user (audit trail)
     # -----------------------------
     st.sidebar.header("Rol y usuario")
-    role = st.sidebar.selectbox("Selecciona el rol", ROLES)
+    role = st.sidebar.selectbox("Selecciona el rol", ROLES, key="role_select")
 
     # Set a sensible default user_id depending on the selected role
     default_user = "REC_01"
@@ -815,104 +815,124 @@ def main():
     elif "Enfermería" in role:
         default_user = "ENF_01"
 
-    user_id = st.sidebar.text_input("ID de usuario (ej: REC_01 / FAC_01)", value=default_user)
-
-    # -----------------------------
-# Thesis demo mode (synthetic data)
-# -----------------------------
-st.sidebar.markdown("---")
-st.sidebar.subheader("Modo demo (tesis)")
-demo_mode = st.sidebar.toggle("Activar modo demo (datos sintéticos)", value=False)
-
-if demo_mode:
-    st.info("DEMO MODE — Synthetic data only (no real patient information).")
-
-    procedures_df = load_procedures()
-
-    # Keep this visible (simple + essential)
-    n = st.sidebar.number_input(
-        "Cantidad de citas a generar",
-        min_value=1,
-        max_value=500,
-        value=200,
-        step=25
+    user_id = st.sidebar.text_input(
+        "ID de usuario (ej: REC_01 / FAC_01)",
+        value=default_user,
+        key="user_id_input"
     )
 
-    # Defaults (safe + thesis-friendly)
-    pct_flagged = 0.20
-    pct_returned = 0.25
-    min_delay_mins = 5
-    max_delay_mins = 30
-    seed = 42
-
-    # Put ALL tuning sliders inside an expander (clean UI)
-    with st.sidebar.expander("Ajustes avanzados (opcional)", expanded=False):
-        pct_flagged = st.slider(
-            "% citas marcadas en recepción",
-            min_value=0,
-            max_value=60,
-            value=int(pct_flagged * 100),
-            step=1
-        ) / 100.0
-
-        pct_returned = st.slider(
-            "% devueltas por facturación (de las revisadas)",
-            min_value=0,
-            max_value=60,
-            value=int(pct_returned * 100),
-            step=1
-        ) / 100.0
-
-        min_delay_mins = st.slider(
-            "Minutos mínimo (ingreso → decisión)",
-            min_value=0,
-            max_value=120,
-            value=min_delay_mins,
-            step=1
-        )
-
-        max_delay_mins = st.slider(
-            "Minutos máximo (ingreso → decisión)",
-            min_value=min_delay_mins,
-            max_value=240,
-            value=max_delay_mins,
-            step=1
-        )
-
-        seed = st.number_input(
-            "Semilla (reproducibilidad)",
-            min_value=0,
-            max_value=999999,
-            value=seed,
-            step=1
-        )
-
-    col_a, col_b = st.sidebar.columns(2)
-    with col_a:
-        if st.button("Generar datos demo"):
-            generate_synthetic_dataset(
-                n=int(n),
-                procedures_df=procedures_df,
-                pct_flagged=pct_flagged,
-                pct_returned=pct_returned,
-                min_delay_mins=int(min_delay_mins),
-                max_delay_mins=int(max_delay_mins),
-                seed=int(seed),
-            )
-            st.success(f"Generadas {n} citas sintéticas.")
-            st.rerun()
-
-    with col_b:
-        if st.button("Borrar datos demo"):
-            reset_demo_data()
-            st.warning("Datos demo eliminados (citas/eventos).")
-            st.rerun()
-
     # -----------------------------
-    # Navigation
+    # Thesis demo mode (synthetic data)
     # -----------------------------
     st.sidebar.markdown("---")
-    pantalla = st.sidebar.radio("Pantalla", ["Recepción", "Facturación", "Analítica"], index=0)
+    st.sidebar.subheader("Modo demo (tesis)")
+
+    demo_mode = st.sidebar.toggle(
+        "Activar modo demo (datos sintéticos)",
+        value=False,
+        key="demo_toggle"
+    )
+
+    if demo_mode:
+        st.info("DEMO MODE — Synthetic data only (no real patient information).")
+
+        procedures_df = load_procedures()
+
+        # Keep this visible (simple + essential)
+        n = st.sidebar.number_input(
+            "Cantidad de citas a generar",
+            min_value=1,
+            max_value=500,
+            value=200,
+            step=25,
+            key="demo_n"
+        )
+
+        # Defaults (safe + thesis-friendly)
+        pct_flagged = 0.20
+        pct_returned = 0.25
+        min_delay_mins = 5
+        max_delay_mins = 30
+        seed = 42
+
+        # Put ALL tuning sliders inside an expander (clean UI)
+        with st.sidebar.expander("Ajustes avanzados (opcional)", expanded=False):
+            pct_flagged = st.slider(
+                "% citas marcadas en recepción",
+                min_value=0,
+                max_value=60,
+                value=int(pct_flagged * 100),
+                step=1,
+                key="demo_pct_flagged"
+            ) / 100.0
+
+            pct_returned = st.slider(
+                "% devueltas por facturación (de las revisadas)",
+                min_value=0,
+                max_value=60,
+                value=int(pct_returned * 100),
+                step=1,
+                key="demo_pct_returned"
+            ) / 100.0
+
+            min_delay_mins = st.slider(
+                "Minutos mínimo (ingreso → decisión)",
+                min_value=0,
+                max_value=120,
+                value=min_delay_mins,
+                step=1,
+                key="demo_min_delay"
+            )
+
+            max_delay_mins = st.slider(
+                "Minutos máximo (ingreso → decisión)",
+                min_value=min_delay_mins,
+                max_value=240,
+                value=max_delay_mins,
+                step=1,
+                key="demo_max_delay"
+            )
+
+            seed = st.number_input(
+                "Semilla (reproducibilidad)",
+                min_value=0,
+                max_value=999999,
+                value=seed,
+                step=1,
+                key="demo_seed"
+            )
+
+        col_a, col_b = st.sidebar.columns(2)
+        with col_a:
+            if st.button("Generar datos demo", key="demo_generate"):
+                generate_synthetic_dataset(
+                    n=int(n),
+                    procedures_df=procedures_df,
+                    pct_flagged=pct_flagged,
+                    pct_returned=pct_returned,
+                    min_delay_mins=int(min_delay_mins),
+                    max_delay_mins=int(max_delay_mins),
+                    seed=int(seed),
+                )
+                st.success(f"Generadas {n} citas sintéticas.")
+                st.rerun()
+
+        with col_b:
+            if st.button("Borrar datos demo", key="demo_reset"):
+                reset_demo_data()
+                st.warning("Datos demo eliminados (citas/eventos).")
+                st.rerun()
+
+    # -----------------------------
+    # Navigation  (IMPORTANT: always visible)
+    # -----------------------------
+    st.sidebar.markdown("---")
+    pantalla = st.sidebar.radio(
+        "Pantalla",
+        ["Recepción", "Facturación", "Analítica"],
+        index=0,
+        key="pantalla_radio"
+    )
 
     if pantalla == "Recepción":
         page_reception(user_id)
