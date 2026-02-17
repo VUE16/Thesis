@@ -1,0 +1,17 @@
+# Python / VS Code
+__pycache__/
+*.pyc
+.vscode/
+
+# Virtual env
+.venv/
+venv/
+
+# Mac
+.DS_Store
+
+# Local data (optional)
+# Uncomment these if you do NOT want to push CSV demo data to GitHub
+# data_mvp/
+# Local data (do not upload)
+data_mvp/

@@ -11,47 +11,56 @@ from config import (
 )
 
 # -----------------------------
-# Branding (logo + colores)
+# Branding (logo + colors)
 # -----------------------------
+# Use relative paths so it works locally and when deployed (Streamlit Cloud).
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_PATH = ASSETS_DIR / "logo.png"
 
-# Colores (muy cercanos al logo; si quieres, luego los afinamos)
+# Approx brand colors (close to the logo)
 BRAND_BLUE = "#2E69A3"
 BRAND_GREEN = "#3A8B4A"
 BRAND_YELLOW = "#E6C300"
-BRAND_BG = "#F6F9FC"
-CARD_BG = "#FFFFFF"
-TEXT_DARK = "#0F172A"
 TEXT_MUTED = "#475569"
 
 def inject_brand_css():
-    st.markdown(f"""
-<style>
-/* Primary button */
-div.stButton > button {{
-    background: {BRAND_BLUE} !important;
-    color: #FFFFFF !important;
-    border: 1px solid {BRAND_BLUE} !important;
-    border-radius: 12px !important;
-    padding: 0.55rem 1rem !important;
-    font-weight: 700 !important;
-}}
+    """Lightweight CSS overrides: brand button + fix label readability on light backgrounds."""
+    st.markdown(
+        f"""
+        <style>
+        /* Primary button */
+        div.stButton > button {{
+            background: {BRAND_BLUE} !important;
+            color: #FFFFFF !important;
+            border: 1px solid {BRAND_BLUE} !important;
+            border-radius: 12px !important;
+            padding: 0.55rem 1rem !important;
+            font-weight: 700 !important;
+        }}
+        div.stButton > button:hover {{
+            background: {BRAND_GREEN} !important;
+            border-color: {BRAND_GREEN} !important;
+            color: #FFFFFF !important;
+        }}
 
-div.stButton > button:hover {{
-    background: {BRAND_GREEN} !important;
-    border-color: {BRAND_GREEN} !important;
-    color: #FFFFFF !important;
-}}
-</style>
-""", unsafe_allow_html=True)
+        /* Make form labels readable on light background */
+        label, .stMarkdown, .stTextInput label, .stSelectbox label, .stDateInput label, .stRadio label {{
+            color: #111827 !important;
+        }}
 
+        /* Helper/caption text */
+        small, .stCaption, .stHelp {{
+            color: #374151 !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
 def render_sidebar_header():
+    """Sidebar branding (logo + subtle color bars)."""
     if LOGO_PATH.exists():
         st.sidebar.image(str(LOGO_PATH), use_container_width=True)
-
-        # Barras de color (más “branding” sin duplicar el logo)
         st.sidebar.markdown(
             f"""
             <div style="height:10px"></div>
@@ -62,7 +71,7 @@ def render_sidebar_header():
             unsafe_allow_html=True
         )
     else:
-        st.sidebar.warning("Logo no encontrado. Revisa assets/logo.png")
+        st.sidebar.warning("Logo not found. Check assets/logo.png")
 
     st.sidebar.markdown(
         f"""
@@ -77,8 +86,9 @@ def render_sidebar_header():
     )
     st.sidebar.markdown("---")
 
+
 # -----------------------------
-# Etiquetas UI (Español)
+# UI label dictionaries (Spanish)
 # -----------------------------
 FIELD_LABELS_ES = {
     "document_type": "Tipo de documento",
@@ -103,13 +113,16 @@ FLAG_REASON_LABELS = {
     "COPAY_NOT_NUMERIC": "Copago: debe ser numérico",
 }
 
+
 # -----------------------------
-# Utilities: archivos + IO seguro
+# Utilities: safe IO
 # -----------------------------
 def ensure_data_folder():
+    """Create data folder if missing (important for first run / clean deployments)."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 def safe_read_csv(path: Path, columns=None) -> pd.DataFrame:
+    """Read CSV safely; return empty DataFrame if missing or unreadable."""
     if not path.exists():
         return pd.DataFrame(columns=columns or [])
     try:
@@ -118,6 +131,7 @@ def safe_read_csv(path: Path, columns=None) -> pd.DataFrame:
         return pd.DataFrame(columns=columns or [])
 
 def append_row_csv(path: Path, row: dict):
+    """Append one row to a CSV, creating it with header if needed."""
     df = pd.DataFrame([row])
     header = not path.exists()
     df.to_csv(path, mode="a", header=header, index=False)
@@ -137,6 +151,7 @@ def log_event(
     previous_status: str | None = None,
     new_status: str | None = None
 ):
+    """Event log used to compute KPIs later (analytics page)."""
     event = {
         "event_id": str(uuid.uuid4()),
         "timestamp": now_iso(),
@@ -153,10 +168,12 @@ def log_event(
     }
     append_row_csv(EVENTS_LOG_FILE, event)
 
+
 # -----------------------------
-# Procedimientos
+# Procedures catalog
 # -----------------------------
 def load_procedures() -> pd.DataFrame:
+    """Load procedures reference file; create a starter set if it doesn't exist yet."""
     cols = ["procedure_name", "authorization_required"]
     df = safe_read_csv(PROCEDURES_FILE, columns=cols)
 
@@ -178,6 +195,7 @@ def load_procedures() -> pd.DataFrame:
     return df
 
 def authorization_required_for(proc_name: str, procedures_df: pd.DataFrame) -> bool:
+    """Lookup whether a procedure requires authorization in the reference catalog."""
     match = procedures_df[
         procedures_df["procedure_name"].astype(str).str.strip().str.lower()
         == str(proc_name).strip().lower()
@@ -186,10 +204,12 @@ def authorization_required_for(proc_name: str, procedures_df: pd.DataFrame) -> b
         return False
     return bool(match.iloc[0]["authorization_required"])
 
+
 # -----------------------------
-# Reglas de validación (devuelven CÓDIGOS)
+# Validation rules (return internal codes)
 # -----------------------------
 def rule_checks(form: dict, procedures_df: pd.DataFrame) -> list[str]:
+    """Soft validation rules. Return internal codes (mapped to Spanish for display)."""
     reasons = []
 
     doc = str(form.get("document_number", "")).strip()
@@ -226,6 +246,7 @@ def rule_checks(form: dict, procedures_df: pd.DataFrame) -> list[str]:
     return reasons
 
 def missing_required_fields(form: dict) -> list[str]:
+    """Check REQUIRED_FIELDS from config and return missing ones."""
     missing = []
     for f in REQUIRED_FIELDS:
         v = form.get(f)
@@ -236,6 +257,7 @@ def missing_required_fields(form: dict) -> list[str]:
     return missing
 
 def get_flag_reasons(events: pd.DataFrame) -> pd.DataFrame:
+    """Extract only FLAGGED_RULE events."""
     if events.empty or "event_type" not in events.columns:
         return pd.DataFrame(columns=["appointment_id", "flag_reason"])
     flags = events[events["event_type"] == "FLAGGED_RULE"].copy()
@@ -243,8 +265,9 @@ def get_flag_reasons(events: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["appointment_id", "flag_reason"])
     return flags[["appointment_id", "flag_reason"]]
 
+
 # -----------------------------
-# Páginas
+# Pages
 # -----------------------------
 def page_reception(user_id: str):
     st.header("Recepción — Agendamiento e ingreso")
@@ -261,12 +284,11 @@ def page_reception(user_id: str):
             first_name = st.text_input("Primer nombre")
             first_surname = st.text_input("Primer apellido")
             date_of_birth = st.date_input(
-    "Fecha de nacimiento",
-    value=date(1990, 1, 1),
-    min_value=date(1900, 1, 1),
-    max_value=date.today(),  # or date(2026, 12, 31)
-)
-
+                "Fecha de nacimiento",
+                value=date(1990, 1, 1),
+                min_value=date(1900, 1, 1),
+                max_value=date.today()
+            )
 
         with col2:
             eps_name = st.text_input("EPS")
@@ -305,8 +327,14 @@ def page_reception(user_id: str):
         missing = missing_required_fields(form)
         if missing:
             missing_labels = [FIELD_LABELS_ES.get(f, f) for f in missing]
-            log_event("BLOCKED_MISSING_FIELD", None, "Recepción", user_id, flagged=True,
-                      flag_reason="FALTAN_CAMPOS: " + ", ".join(missing))
+            log_event(
+                "BLOCKED_MISSING_FIELD",
+                None,
+                "Recepción",
+                user_id,
+                flagged=True,
+                flag_reason="FALTAN_CAMPOS: " + ", ".join(missing)
+            )
             st.error(f"Faltan campos obligatorios: {', '.join(missing_labels)}")
             return
 
@@ -341,7 +369,10 @@ def page_reception(user_id: str):
             log_event("SENT_TO_REVIEW", appointment_id, "Recepción", user_id)
 
             reasons_es = [FLAG_REASON_LABELS.get(r, r) for r in reasons]
-            st.warning("Cita guardada, pero enviada a revisión de Facturación. Motivos: " + ", ".join(reasons_es))
+            st.warning(
+                "Cita guardada, pero enviada a revisión de Facturación. Motivos: "
+                + ", ".join(reasons_es)
+            )
         else:
             st.success("Cita guardada y lista (sin banderas).")
 
@@ -409,8 +440,14 @@ def page_billing(user_id: str):
         correction_reason = st.selectbox("Motivo de devolución", CORRECTION_REASONS)
 
     if st.button("Guardar decisión"):
-        log_event("REVIEW_DECISION_RECORDED", selected_id, "Facturación", user_id,
-                  review_decision=decision, correction_reason=correction_reason)
+        log_event(
+            "REVIEW_DECISION_RECORDED",
+            selected_id,
+            "Facturación",
+            user_id,
+            review_decision=decision,
+            correction_reason=correction_reason
+        )
         st.success("Decisión registrada.")
 
 def page_analytics():
@@ -429,13 +466,14 @@ def page_analytics():
     flagged_appts = flagged["appointment_id"].nunique() if not flagged.empty else 0
     pct_flagged = (flagged_appts / total_appts) * 100 if total_appts else 0
 
-    top_reasons = (
-        flagged["flag_reason"].value_counts().reset_index()
-        .rename(columns={"index": "Motivo", "flag_reason": "Cantidad"})
-        if not flagged.empty else pd.DataFrame(columns=["Motivo", "Cantidad"])
-    )
-    if not top_reasons.empty:
-        top_reasons["Motivo"] = top_reasons["Motivo"].apply(lambda x: FLAG_REASON_LABELS.get(str(x), str(x)))
+    # --- Top flag reasons (robust) ---
+    if flagged.empty or "flag_reason" not in flagged.columns:
+        top_reasons = pd.DataFrame(columns=["Motivo", "Cantidad"])
+    else:
+        vc = flagged["flag_reason"].astype(str).value_counts()
+        top_reasons = vc.rename_axis("flag_reason").reset_index(name="Cantidad")
+        top_reasons["Motivo"] = top_reasons["flag_reason"].apply(lambda x: FLAG_REASON_LABELS.get(x, x))
+        top_reasons = top_reasons[["Motivo", "Cantidad"]]
 
     decisions = events[events["event_type"] == "REVIEW_DECISION_RECORDED"].copy() if not events.empty else pd.DataFrame()
     total_reviewed = decisions["appointment_id"].nunique() if not decisions.empty else 0
@@ -483,34 +521,34 @@ def page_analytics():
     st.subheader("Eventos (log) — últimos 50")
     st.dataframe(events.tail(50) if not events.empty else pd.DataFrame(), use_container_width=True)
 
+
 # -----------------------------
 # Main
 # -----------------------------
 def main():
     st.set_page_config(page_title="Centro Clínico Santiago — MVP", layout="wide")
 
-    # ✅ CSS FIRST so labels/buttons render correctly
+    # CSS first so labels/buttons render correctly as the page loads
     inject_brand_css()
 
-    # ✅ Data folder
+    # Ensure storage folder exists (local + Streamlit Cloud)
     ensure_data_folder()
 
-    # ✅ Sidebar (logo + color bars)
+    # Sidebar branding (logo + color bars)
     render_sidebar_header()
 
-    # ✅ Main title
     st.title("MVP — Consulta Externa + Revisión en Facturación (HITL)")
 
-    # ✅ Sidebar controls
     st.sidebar.header("Rol y usuario")
     role = st.sidebar.selectbox("Selecciona el rol", ROLES)
 
+    # Set a sensible default user_id depending on the selected role
     default_user = "REC_01"
     if role == "Facturación":
         default_user = "FAC_01"
     elif role == "Analítica":
         default_user = "ANA_01"
-    elif role == "Enfermería (solo lectura)":
+    elif "Enfermería" in role:
         default_user = "ENF_01"
 
     user_id = st.sidebar.text_input("ID de usuario (ej: REC_01 / FAC_01)", value=default_user)
@@ -518,14 +556,12 @@ def main():
     st.sidebar.markdown("---")
     pantalla = st.sidebar.radio("Pantalla", ["Recepción", "Facturación", "Analítica"], index=0)
 
-    # ✅ Route to pages
     if pantalla == "Recepción":
         page_reception(user_id)
     elif pantalla == "Facturación":
         page_billing(user_id)
     else:
         page_analytics()
-
 
 if __name__ == "__main__":
     main()
