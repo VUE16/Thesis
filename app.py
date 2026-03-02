@@ -878,18 +878,18 @@ def main():
             min_delay_mins = st.slider(
                 "Minutos mínimo (ingreso → decisión)",
                 min_value=0,
-                max_value=120,
+                max_value=720,
                 value=min_delay_mins,
-                step=1,
+                step=5,
                 key="demo_min_delay"
             )
 
             max_delay_mins = st.slider(
                 "Minutos máximo (ingreso → decisión)",
                 min_value=min_delay_mins,
-                max_value=240,
+                max_value=720,
                 value=max_delay_mins,
-                step=1,
+                step=5,
                 key="demo_max_delay"
             )
 
