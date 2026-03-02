@@ -880,8 +880,8 @@ def main():
                 min_value=0,
                 max_value=720,
                 value=min_delay_mins,
-                step=5,
-                key="demo_min_delay"
+                step=15,
+                key="demo_min_delay_v2"
             )
 
             max_delay_mins = st.slider(
@@ -889,8 +889,8 @@ def main():
                 min_value=min_delay_mins,
                 max_value=1500,
                 value=max_delay_mins,
-                step=100,
-                key="demo_max_delay"
+                step=30,
+                key="demo_max_delay_v2"
             )
 
             seed = st.number_input(
